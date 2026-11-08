@@ -13,7 +13,7 @@
 /* Layout: a dark stage. One fretboard card in the middle, controls above, stats below. */
 :root{
   --bg:#12100e; --panel:#1b1714; --panel2:#241e19; --line:#3a3129;
-  --text:#efe7dc; --muted:#a09386; --accent:#f0a43a; --ok:#43c47a; --bad:#ef5350;
+  --text:#efe7dc; --muted:#a09386; --accent:#f0a43a; --ok:#43c47a; --bad:#ef5350; --blue:#5eb0ff;
   --board:#2a1c13; --board2:#33241a; --wire:#a7a5ab; --string:#cdbb9c;
   --display:'Big Shoulders Display','Arial Narrow',Impact,sans-serif;
   --body:'Noto Sans Thai','Sarabun',system-ui,-apple-system,'Segoe UI',sans-serif;
@@ -53,6 +53,10 @@ h1 span{color:var(--accent)}
 .status{font:800 clamp(22px,3.4vw,30px)/1.15 var(--display);letter-spacing:.03em;text-transform:uppercase}
 .status small{display:block;font:400 14px/1.4 var(--body);letter-spacing:0;text-transform:none;color:var(--muted)}
 .status.ok{color:var(--ok)} .status.bad{color:var(--bad)}
+.rightcol{display:flex;flex-direction:column;align-items:flex-end;gap:2px}
+.hintbig{font:800 clamp(22px,3.4vw,30px)/1.15 var(--display);letter-spacing:.03em}
+.hintbig:empty{display:none}
+.hintbig.hi{color:var(--bad)} .hintbig.lo{color:var(--blue)}
 .heard{font-family:var(--mono);font-size:14px;color:var(--muted);min-width:11ch;text-align:right}
 .boardbox{margin-top:10px;overflow-x:auto}
 .boardbox svg{display:block;width:100%;height:auto;min-width:560px}
@@ -75,7 +79,6 @@ h1 span{color:var(--accent)}
 .btn.primary{background:var(--accent);border-color:var(--accent);color:#1a1208;font-weight:700;padding-inline:40px;min-width:160px;min-height:68px;font-size:20px}
 .btn.go{background:var(--ok);border-color:var(--ok);color:#0b1a10;font-weight:700;padding-inline:36px;min-width:160px;min-height:68px;font-size:20px}
 .btn:active{transform:scale(.97)}
-.timer.check i{background:var(--ok)}
 .btn:disabled{opacity:.4;cursor:default}
 .note{color:var(--muted);font-size:13px;margin:0}
 
@@ -130,7 +133,7 @@ textarea{width:100%;min-height:110px;margin-top:10px;background:var(--bg);border
     <section class="card" aria-live="polite">
       <div class="stage-top">
         <div class="status" id="status"></div>
-        <div class="heard" id="heard"></div>
+        <div class="rightcol"><div class="hintbig" id="hintBig" aria-live="polite"></div><div class="heard" id="heard"></div></div>
       </div>
       <div class="timer" id="timer" hidden><i id="timerBar"></i></div>
       <div class="boardwrap"><div class="boardbox" id="board"></div><div id="flash" aria-hidden="true"></div></div>
@@ -368,7 +371,7 @@ const $=s=>document.querySelector(s);
 const KEY='duelTraining.v1';
 const S={tab:'train',level:0,mode:'easy',sens:0.01,vol:80,stats:{},phase:'idle',
   target:null,qid:0,missed:false,hint:'',result:null,played:null,lastM:null,deadline:0,timerId:null,
-  run:null,choosing:false,attempt:1,say:'',checkable:false,checkWin:false,checking:false};
+  run:null,choosing:false,attempt:1,say:'',dir:'',checkable:false,checking:false};
 function load(){
   try{
     const o=JSON.parse(localStorage.getItem(KEY)||'null');
@@ -392,7 +395,7 @@ const statKey=()=>S.level+':'+S.mode;
 function st(key){ return S.stats[key||statKey()]||(S.stats[key||statKey()]={c:0,t:0,streak:0,best:0,passed:false}); }
 
 /* ===== เกม ===== */
-const CHECK_MS=3000, RETRY_GAP=1000, NEXT_GAP=1000;     // เวลาเช็ค / รอก่อนลองใหม่ / ค้างภาพเฉลย (มิลลิวินาที)
+const RETRY_GAP=1000, NEXT_GAP=1000;     // รอก่อนลองใหม่ / ค้างภาพเฉลยก่อนข้อต่อไป (มิลลิวินาที)
 const alive=q=>q===S.qid;
 async function startQuestion(){
   const qid=++S.qid;
@@ -403,7 +406,7 @@ async function startQuestion(){
   const pool=poolFor(S.level);
   let t; do{ t=pool[Math.floor(Math.random()*pool.length)]; }while(pool.length>1&&t.m===S.lastM);
   S.target=t; S.lastM=t.m; S.missed=false; S.hint=''; S.say=''; S.attempt=1; S.result=null; S.played=null; S.playedPos=null;
-  S.checkable=false; S.checkWin=false; S.checking=false; S.choosing=false; clearFlash();
+  S.dir=''; S.checkable=false; S.checking=false; S.choosing=false; clearFlash();
   S.phase='playing'; render();
   await playNote(t.m); if(!alive(qid)) return;
   await sleep(450);   if(!alive(qid)) return;      // รอเสียงโจทย์จางก่อนเปิดฟัง
@@ -411,7 +414,7 @@ async function startQuestion(){
 }
 function beginListening(keepHint){
   S.phase='listening'; lastReported=null; cand={m:null,n:0}; if(!keepHint) S.hint=''; S.say='';
-  S.checkable=false; S.checkWin=false;
+  S.checkable=false;
   const ms=MODES.find(m=>m.id===S.mode).ms;
   clearInterval(S.timerId);
   if(ms){
@@ -439,8 +442,9 @@ function onPlayed(m,pos){
   // Hard ไม่มีโอกาสซ้ำ, Normal ผิดครั้งที่สองเฉลยเลย
   if(S.mode==='hard'||(S.mode==='normal'&&S.attempt>=2)){ finish(false,m,null,pos); return; }
   let hint='';
+  const d=m-t.m;
+  S.dir=d>0?'hi':(d<0?'lo':'');                    // สูงไป = เสียงที่ดีดสูงกว่าโจทย์ (Hard ไม่มีตัวช่วย เข้ามาไม่ถึงตรงนี้)
   if(S.mode==='easy'){
-    const d=m-t.m;
     if(pos&&d===0) hint='เสียงถูก แต่ตำแหน่งผิด ลองหาจุดอื่นของโน้ตนี้';
     else if(d%12===0) hint='ได้ยิน '+midiName(m)+' ชื่อโน้ตถูก แต่ผิดช่วงเสียง ลอง'+(d>0?'ต่ำลง':'สูงขึ้น')+'อีก '+Math.abs(d/12)+' ช่วงเสียง';
     else hint='ได้ยิน '+midiName(m)+' · '+(d>0?'สูงไป ':'ต่ำไป ')+Math.abs(d)+' เซมิโทน';
@@ -467,7 +471,7 @@ function finish(ok,playedM,reason,pos){
   S.phase='revealed'; S.played=playedM; S.say='';
   S.playedPos=ok?null:(pos||(playedM?nearestPos(playedM,LEVELS[S.level].max,S.target):null));
   S.result={ok,reason,clean:ok&&!S.missed};
-  S.checkable=false; S.checkWin=false; S.checking=false;
+  S.dir=''; S.checkable=false; S.checking=false;
   let dur=0;
   if(ok){ dur=playSfx('ok'); showFlash(true); }
   else if(reason!=='giveup'){ dur=playSfx('bad'); showFlash(false); }
@@ -477,35 +481,20 @@ function finish(ok,playedM,reason,pos){
 async function afterReveal(qid,ok,dur){            // เสียงเตือนจบ แล้วเล่นโน้ตเฉลยซ้ำ ไม่ทับกัน
   await sleep(dur*1000+250);       if(!alive(qid)) return;
   await playNote(S.target.m);      if(!alive(qid)) return;
-  S.checkable=ok||S.run!=='cont';
-  if(ok){ if(S.run==='cont') startCheckWindow(qid); else render(); }
-  else if(S.run==='cont'){ render(); await sleep(NEXT_GAP); if(!alive(qid)) return; startQuestion(); }
-  else render();
-}
-function startCheckWindow(qid){                    // 3 วินาทีให้กดเช็ค ไม่กดก็ไปข้อต่อไป
-  clearInterval(S.timerId);
-  S.checkWin=true; S.checking=false; S.deadline=Date.now()+CHECK_MS;
-  $('#timerBar').style.transform='scaleX(1)';
-  render();
-  S.timerId=setInterval(()=>{
-    if(!alive(qid)){ clearInterval(S.timerId); return; }
-    const left=S.deadline-Date.now();
-    $('#timerBar').style.transform='scaleX('+Math.max(0,left/CHECK_MS)+')';
-    if(left<=0){ clearInterval(S.timerId); S.checkWin=false; startQuestion(); }
-  },50);
+  if(S.run==='cont'){ render(); await sleep(NEXT_GAP); if(!alive(qid)) return; startQuestion(); }   // ต่อเนื่อง: ไปข้อต่อไปเอง
+  else{ S.checkable=true; render(); }                                                              // ทีละข้อ: รอกดเอง มีปุ่มเช็ค
 }
 async function doCheck(){
   if(S.phase!=='revealed'||!S.checkable||S.checking) return;
   const q=S.qid;
-  clearInterval(S.timerId); S.checkWin=false; S.checking=true; render();
+  S.checking=true; render();
   await playNote(S.target.m); if(!alive(q)) return;
-  S.checking=false;
-  if(S.run==='cont'&&S.result.ok) startCheckWindow(q); else render();
+  S.checking=false; render();
 }
 function resetRound(){
   S.qid++; stopSound(); clearFlash(); clearInterval(S.timerId);
-  S.phase='idle'; S.run=null; S.choosing=false; S.hint=''; S.say=''; S.attempt=1; S.result=null;
-  S.checkable=false; S.checkWin=false; S.checking=false; render();
+  S.phase='idle'; S.run=null; S.choosing=false; S.hint=''; S.say=''; S.dir=''; S.attempt=1; S.result=null;
+  S.checkable=false; S.checking=false; render();
 }
 
 /* ===== วาดคอกีต้าร์ ===== */
@@ -555,7 +544,7 @@ function render(){
     status='ดีดเลย!'; sub=S.hint||(micOk?'ดีดโน้ตที่ได้ยินบนกีต้าร์':'ไมค์ไม่พร้อม แตะตำแหน่งบนคอแทนการดีด');
   }else{
     const t=S.target, tp=posText(t);
-    if(S.result.ok){ stEl.classList.add('ok'); status='ถูก! '+midiName(t.m); sub=(S.result.clean?tp:'ตอบถูกแล้ว แต่พลาดมาก่อน ('+tp+')')+(S.checkWin?' · ข้อต่อไปใน 3 วินาที กดฟังซ้ำเพื่อเช็ค':''); }
+    if(S.result.ok){ stEl.classList.add('ok'); status='ถูก! '+midiName(t.m); sub=S.result.clean?tp:'ตอบถูกแล้ว แต่พลาดมาก่อน ('+tp+')'; }
     else{ stEl.classList.add('bad');
       status=S.result.reason==='timeout'?'หมดเวลา':(S.played?'ผิด · ได้ยิน '+midiName(S.played):'ยังไม่ถูก');
       sub='โจทย์คือ '+midiName(t.m)+' อยู่ที่ '+tp; }
@@ -569,8 +558,9 @@ function render(){
   }
   const bx=$('#board'); bx.className='boardbox'+(tapMode?' tap':'');
   bx.innerHTML=boardSVG(L.max,marks);
-  $('#timer').hidden=!((S.phase==='listening'&&MODES.find(m=>m.id===S.mode).ms)||S.checkWin);
-  $('#timer').classList.toggle('check',!!S.checkWin);
+  $('#timer').hidden=!(S.phase==='listening'&&MODES.find(m=>m.id===S.mode).ms);
+  const hb=$('#hintBig'), showDir=S.dir&&(S.phase==='playing'||S.phase==='listening');
+  hb.className='hintbig'+(showDir?' '+S.dir:''); hb.textContent=showDir?(S.dir==='hi'?'สูงไป':'ต่ำไป'):'';
   if(S.phase!=='listening'&&!S.checkable) $('#heard').textContent='';
 
   let a='';
@@ -585,7 +575,7 @@ function render(){
     if(S.mode==='easy') a+=`<button class="btn" data-act="giveup">เฉลย</button>`;
     a+=`<button class="btn" data-act="stop">หยุด</button>`;
   }else{
-    if(S.checkable||S.checking) a+=`<button class="btn ${S.checkWin?'primary':''}" data-act="check"${S.checking?' disabled':''}>ฟังโจทย์ซ้ำ${S.result.ok?' (เช็ค)':''}</button>`;
+    if(S.checkable||S.checking) a+=`<button class="btn" data-act="check"${S.checking?' disabled':''}>ฟังโจทย์ซ้ำ${S.result.ok?' (เช็ค)':''}</button>`;
     if(S.run!=='cont') a+=`<button class="btn primary" data-act="next">ข้อต่อไป</button>`;
     a+=`<button class="btn" data-act="stop">หยุด</button>`;
   }
